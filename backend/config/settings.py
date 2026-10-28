@@ -52,7 +52,7 @@ INSTALLED_APPS = [
 
     "accounts",
     "organizations",
-    "faults",              
+    # "faults",              
 
 
 ]
