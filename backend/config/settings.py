@@ -44,15 +44,15 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     "rest_framework",             
-    "rest_framework.authtoken",   # توکن‌های API برای
-    "django_filters",             # فیلتر روی کوئری‌ست 
+    "rest_framework.authtoken",   # توکن‌های API
+    "django_filters",             # فیلتر  کوئری‌ست 
     
     
     "corsheaders", 
 
     "accounts",
     "organizations",
-    "faults",             
+    "faults",              
 
 
 ]
@@ -155,7 +155,7 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
     ],
 
-    "DEFAULT_PERMISSION_CLASSES": [
+        "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
 
