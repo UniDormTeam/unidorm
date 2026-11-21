@@ -1,109 +1,108 @@
+"""ویوهای مدیریت سازمان‌ها، اعضا و مدیران سازمان."""
+
 import csv
 import io
 import os
 
+from django.db import transaction
 from django.shortcuts import get_object_or_404
-from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import IntegrityError, transaction
-from django.db.models import Q
-
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
-from accounts.serializers import create_imported_student
-from accounts.models import User, StudentProfile
+from accounts.models import User
+from accounts.serializers import ImportedStudentSerializer, create_imported_student
 
-from .models import (
-    Organization,
-    OrganizationManager,
-    OrganizationMembership,
-)
-from .serializers import (
-    OrganizationSerializer,
-    AssignManagerSerializer,
-    OrganizationManagerSerializer,
-    StudentImportRowSerializer,
-    AddMemberSerializer,
-    OrganizationMemberSerializer,
-)
+from .models import Organization, OrganizationManager, OrganizationMembership
 from .permissions import (
-    IsSystemAdmin,
     IsManagerOrSystemAdmin,
     IsOrgManagerOrAdmin,
+    IsOrgMemberOrManager,
 )
+from .serializers import (
+    AddMemberSerializer,
+    AssignManagerSerializer,
+    OrganizationManagerSerializer,
+    OrganizationMemberSerializer,
+    OrganizationSerializer,
+)
+
+
+def organizations_for_user(user):
+    """
+    سازمان‌هایی که کاربر به آن‌ها دسترسی دارد.
+
+    ادمین کل: همه سازمان‌ها
+    مدیر: سازمان‌هایی که به او تخصیص داده شده
+    دانشجو/مسئول: سازمان‌هایی که عضویت فعال دارند
+    """
+    if user.is_superuser:
+        return Organization.objects.all()
+
+    if user.role == User.Role.MANAGER:
+        return Organization.objects.filter(manager_assignments__manager=user)
+
+    return Organization.objects.filter(memberships__user=user, memberships__is_active=True)
 
 
 class OrganizationListCreateView(generics.ListCreateAPIView):
+    """
+    GET  /api/organizations/   سازمان‌های من
+    POST /api/organizations/   ساخت سازمان جدید (مدیر یا ادمین)
+    """
+
     serializer_class = OrganizationSerializer
-
-    search_fields = ["name", "description", "location"]
-
-    filterset_fields = ["is_active"]
-
-    ordering_fields = ["name", "created_at", "updated_at"]
-    ordering = ["name"]
+    search_fields = ("name", "description", "location")
+    ordering_fields = ("name", "created_at")
+    ordering = ("name",)
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsManagerOrSystemAdmin()]
+            return [IsAuthenticated(), IsManagerOrSystemAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
-        user = self.request.user
-
-        if user.is_superuser:
-            return Organization.objects.all()
-
-        return Organization.objects.filter(
-            Q(manager_assignments__manager=user)
-            | Q(memberships__user=user)
-        ).distinct()
+        return organizations_for_user(self.request.user).distinct()
 
     def perform_create(self, serializer):
         organization = serializer.save()
-        user = self.request.user
 
-        if user.role == User.Role.MANAGER and not user.is_superuser:
+        # سازنده سازمان (اگر مدیر است) به‌عنوان مدیر همان سازمان ثبت می‌شود
+        user = self.request.user
+        if user.role == User.Role.MANAGER:
             OrganizationManager.objects.get_or_create(
                 organization=organization,
                 manager=user,
             )
 
 
-class OrganizationDetailView(generics.RetrieveUpdateDestroyAPIView):
+class OrganizationDetailView(generics.RetrieveUpdateAPIView):
+    """
+    GET   /api/organizations/{id}/   مشاهده اطلاعات سازمان
+    PATCH /api/organizations/{id}/   ویرایش (فقط مدیر همان سازمان)
+    """
+
     serializer_class = OrganizationSerializer
 
     def get_queryset(self):
-        user = self.request.user
-
-        if user.is_superuser:
-            return Organization.objects.all()
-
-        return Organization.objects.filter(
-            Q(manager_assignments__manager=user)
-            | Q(memberships__user=user)
-        ).distinct()
+        return organizations_for_user(self.request.user).distinct()
 
     def get_permissions(self):
         if self.request.method in ("PUT", "PATCH"):
-            return [IsOrgManagerOrAdmin()]
-
-        if self.request.method == "DELETE":
-            return [IsSystemAdmin()]
-
-        return [IsAuthenticated()]
-
-    def perform_update(self, serializer):
-        serializer.save()
+            return [IsAuthenticated(), IsOrgManagerOrAdmin()]
+        return [IsAuthenticated(), IsOrgMemberOrManager()]
 
 
 class OrganizationMembersView(generics.ListCreateAPIView):
+    """
+    GET  /api/organizations/{id}/members/?role=student
+    POST /api/organizations/{id}/members/   افزودن یک عضو
+    """
 
-    permission_classes = [IsOrgManagerOrAdmin]
+    permission_classes = [IsAuthenticated, IsOrgManagerOrAdmin]
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -111,48 +110,114 @@ class OrganizationMembersView(generics.ListCreateAPIView):
         return OrganizationMemberSerializer
 
     def get_queryset(self):
-        organization = get_object_or_404(
-            Organization,
-            pk=self.kwargs["organization_id"],
-        )
-
-        return organization.memberships.select_related(
+        organization = get_object_or_404(Organization, pk=self.kwargs["organization_id"])
+        queryset = organization.memberships.select_related(
             "user",
             "user__student_profile",
-        ).order_by("joined_at")
+        ).order_by("user__last_name", "user__username")
+
+        role = self.request.query_params.get("role")
+        if role:
+            queryset = queryset.filter(role=role)
+
+        return queryset
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["organization"] = get_object_or_404(
+            Organization, pk=self.kwargs["organization_id"]
+        )
+        return context
 
     def create(self, request, *args, **kwargs):
-        organization = get_object_or_404(
-            Organization,
-            pk=self.kwargs["organization_id"],
-        )
-
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        result = serializer.save(organization=organization)
-
-        user = result["user"]
-        profile = getattr(user, "student_profile", None)
+        membership = serializer.save()
 
         return Response(
             {
-                "student_number": profile.student_number if profile else "",
-                "username": user.username,
-                "full_name": user.get_full_name() or user.username,
-                "user_id": user.pk,
-
-                "created_account": result["created_account"],
-
-                "already_member": result["already_member"],
+                "membership_id": membership.pk,
+                "account_status": getattr(
+                    membership, "account_status", "EXISTING_ATTACHED"
+                ),
+                "user": {
+                    "id": membership.user.pk,
+                    "username": membership.user.username,
+                    "full_name": membership.user.full_name,
+                },
+                "membership_role": membership.role,
+                "membership_role_display": membership.get_role_display(),
+                "room_number": membership.room_number,
             },
             status=status.HTTP_201_CREATED,
         )
 
 
-class RemoveMemberView(APIView):
+class BulkAddMembersView(APIView):
+    """
+    POST /api/organizations/{id}/members/bulk/
 
-    permission_classes = [IsOrgManagerOrAdmin]
+    ثبت گروهی اعضا با JSON. هر ردیف مستقل اعتبارسنجی می‌شود و در صورت
+    خطا بقیه ردیف‌ها ثبت می‌شوند؛ نتیجه هر ردیف در results/errors می‌آید.
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgManagerOrAdmin]
+
+    def post(self, request, organization_id):
+        organization = get_object_or_404(Organization, pk=organization_id)
+        members = request.data.get("members")
+
+        if not isinstance(members, list) or not members:
+            raise DRFValidationError({
+                "members": "فهرست اعضا الزامی است."
+            })
+
+        results = []
+        errors = []
+
+        for index, member_data in enumerate(members, start=1):
+            serializer = AddMemberSerializer(
+                data=member_data,
+                context={"organization": organization, "request": request},
+            )
+
+            if not serializer.is_valid():
+                errors.append({"row": index, "data": member_data, "errors": serializer.errors})
+                continue
+
+            try:
+                with transaction.atomic():
+                    membership = serializer.save()
+            except Exception as exc:  # خطای غیرمنتظره یک ردیف بقیه را متوقف نکند
+                errors.append({"row": index, "data": member_data, "errors": str(exc)})
+                continue
+
+            results.append({
+                "membership_id": membership.pk,
+                "username": membership.user.username,
+                "full_name": membership.user.full_name,
+                "membership_role": membership.role,
+                "status": getattr(membership, "account_status", "EXISTING_ATTACHED"),
+            })
+
+        return Response(
+            {
+                "summary": {
+                    "total_processed": len(members),
+                    "created": len(results),
+                    "failed_count": len(errors),
+                },
+                "results": results,
+                "errors": errors,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class RemoveMemberView(APIView):
+    """DELETE /api/organizations/{id}/members/{member_id}/"""
+
+    permission_classes = [IsAuthenticated, IsOrgManagerOrAdmin]
 
     def delete(self, request, organization_id, member_id):
         membership = get_object_or_404(
@@ -160,43 +225,32 @@ class RemoveMemberView(APIView):
             pk=member_id,
             organization_id=organization_id,
         )
-
         membership.delete()
-
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AssignManagerView(APIView):
-    permission_classes = [IsOrgManagerOrAdmin]
+    """
+    GET  /api/organizations/{id}/managers/   فهرست مدیران سازمان
+    POST /api/organizations/{id}/managers/   تعیین مدیر (کاربر باید نقش مدیر داشته باشد)
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgManagerOrAdmin]
 
     def get(self, request, organization_id):
-        organization = get_object_or_404(
-            Organization,
-            pk=organization_id,
+        organization = get_object_or_404(Organization, pk=organization_id)
+        assignments = organization.manager_assignments.select_related("manager")
+        return Response(
+            OrganizationManagerSerializer(assignments, many=True).data,
+            status=status.HTTP_200_OK,
         )
-
-        assignments = organization.manager_assignments.select_related(
-            "manager"
-        )
-
-        serializer = OrganizationManagerSerializer(
-            assignments,
-            many=True,
-        )
-
-        return Response(serializer.data)
 
     def post(self, request, organization_id):
-        organization = get_object_or_404(
-            Organization,
-            pk=organization_id,
-        )
-
+        organization = get_object_or_404(Organization, pk=organization_id)
         serializer = AssignManagerSerializer(
             data=request.data,
             context={"organization": organization},
         )
-
         serializer.is_valid(raise_exception=True)
         assignment = serializer.save()
 
@@ -207,274 +261,168 @@ class AssignManagerView(APIView):
 
 
 class RemoveManagerView(APIView):
-    permission_classes = [IsOrgManagerOrAdmin]
+    """DELETE /api/organizations/{id}/managers/{manager_id}/"""
+
+    permission_classes = [IsAuthenticated, IsOrgManagerOrAdmin]
 
     def delete(self, request, organization_id, manager_id):
         assignment = get_object_or_404(
             OrganizationManager,
+            pk=manager_id,
             organization_id=organization_id,
-            manager_id=manager_id,
         )
-
         assignment.delete()
-
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-def _column_key(value):
-    text = str(value).replace("\u200c", " ")
-    return " ".join(text.split()).lower()
-
-
-# نام‌های مجاز هر ستون در فایل ورودی؛ هم انگلیسی هم فارسی پذیرفته می‌شود
-# هر ستون دیگری در فایل نادیده گرفته می‌شود تا اضافه بودن ستون‌ها خطا ندهد.
+# ---------------------------------------------------------------------------
+# ایمپورت دانشجو از فایل CSV یا اکسل
+# ---------------------------------------------------------------------------
 COLUMN_ALIASES = {
-    _column_key("student_number"): "student_number",
-    _column_key("شماره دانشجویی"): "student_number",
-    _column_key("شماره دانشجو"): "student_number",
-    _column_key("دانشجویی"): "student_number",
-
-    _column_key("first_name"): "first_name",
-    _column_key("نام"): "first_name",
-
-    _column_key("last_name"): "last_name",
-    _column_key("نام خانوادگی"): "last_name",
-    _column_key("نام خانوادگي"): "last_name", 
-
-    _column_key("room_number"): "room_number",
-    _column_key("شماره اتاق"): "room_number",
-    _column_key("اتاق"): "room_number",
-
-    _column_key("dormitory_name"): "dormitory_name",
-    _column_key("نام خوابگاه"): "dormitory_name",
-    _column_key("خوابگاه"): "dormitory_name",
-
-    _column_key("building"): "building",
-    _column_key("ساختمان"): "building",
-    _column_key("بلوک"): "building",
-
-    _column_key("is_dorm_resident"): "is_dorm_resident",
-    _column_key("ساکن خوابگاه"): "is_dorm_resident",
+    "student_number": "student_number",
+    "شماره دانشجویی": "student_number",
+    "شماره_دانشجویی": "student_number",
+    "first_name": "first_name",
+    "نام": "first_name",
+    "last_name": "last_name",
+    "نام خانوادگی": "last_name",
+    "نام_خانوادگی": "last_name",
+    "room_number": "room_number",
+    "شماره اتاق": "room_number",
+    "شماره_اتاق": "room_number",
+    "building": "building",
+    "ساختمان": "building",
+    "dormitory_name": "dormitory_name",
+    "خوابگاه": "dormitory_name",
+    "is_dorm_resident": "is_dorm_resident",
+    "ساکن": "is_dorm_resident",
 }
 
-RESIDENT_TRUE_VALUES = {"1", "true", "yes", "y", "بله", "درست"}
-RESIDENT_FALSE_VALUES = {"0", "false", "no", "n", "خیر", "نخیر", "غلط"}
+TRUE_VALUES = {"1", "true", "yes", "y", "بله", "دارد", "ساکن"}
+FALSE_VALUES = {"0", "false", "no", "n", "خیر", "ندارد"}
 
 
-def normalize_import_row(row):
-    """
-    یک ردیف فایل ورودی را به شکل استاندارد سریالایزر می‌رساند:
-    """
+def _column_key(name):
+    """نرمال‌سازی نام ستون فایل (حذف فاصله و یکسان‌سازی)."""
+    return str(name).strip().lower().replace("ي", "ی").replace("ك", "ک")
 
-    normalized = {}
 
-    for key, value in row.items():
-        if key is None:
+def normalize_import_row(raw_row):
+    """تبدیل هر ردیف فایل به دیکشنری با کلیدهای استاندارد."""
+    row = {}
+
+    for key, value in raw_row.items():
+        mapped = COLUMN_ALIASES.get(_column_key(key))
+        if not mapped:
             continue
-
-        name = COLUMN_ALIASES.get(_column_key(key))
-
-        if name is None or name in normalized:
-            continue
-
-        if value is None:
-            value = ""
 
         if isinstance(value, float) and value.is_integer():
             value = int(value)
 
-        if isinstance(value, bool):
-            normalized[name] = value
-            continue
+        if mapped == "is_dorm_resident":
+            text = str(value).strip().lower() if value is not None else ""
+            row[mapped] = text in TRUE_VALUES
+        else:
+            row[mapped] = str(value).strip() if value is not None else ""
 
-        normalized[name] = str(value).strip()
-
-    resident = normalized.get("is_dorm_resident")
-
-    if resident is None or resident == "":
-        normalized["is_dorm_resident"] = True
-    elif isinstance(resident, str):
-        token = resident.lower()
-
-        if token in RESIDENT_TRUE_VALUES:
-            normalized["is_dorm_resident"] = True
-        elif token in RESIDENT_FALSE_VALUES:
-            normalized["is_dorm_resident"] = False
-
-    return normalized
+    return row
 
 
 class ImportStudentsView(APIView):
+    """
+    POST /api/organizations/{id}/import-students/
+
+    آپلود فایل CSV یا XLSX با ستون‌های شماره دانشجویی، نام، نام خانوادگی،
+    شماره اتاق و ... . هر ردیف یا حساب جدید می‌سازد یا به حساب موجود
+    متصل می‌شود.
+    """
+
+    permission_classes = [IsAuthenticated, IsOrgManagerOrAdmin]
     parser_classes = [MultiPartParser, FormParser]
-    permission_classes = [IsAuthenticated]
 
     def post(self, request, organization_id):
-        organization = get_object_or_404(
-            Organization,
-            pk=organization_id,
-        )
+        organization = get_object_or_404(Organization, pk=organization_id)
+        upload = request.FILES.get("file")
 
-        if not request.user.is_superuser:
-            is_manager = OrganizationManager.objects.filter(
-                organization=organization,
-                manager=request.user,
-            ).exists()
-
-            if not is_manager:
-                return Response(
-                    {"detail": "شما اجازه واردسازی دانشجو به این سازمان را ندارید."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-        uploaded_file = request.FILES.get("file")
-
-        if not uploaded_file:
+        if not upload:
             return Response(
-                {"detail": "فایل را با نام file ارسال کنید."},
+                {"detail": "فایل اکسل یا CSV را در فیلد file ارسال کنید."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        extension = os.path.splitext(uploaded_file.name)[1].lower()
+        extension = os.path.splitext(upload.name)[1].lower()
 
         try:
             if extension == ".csv":
-                content = uploaded_file.read().decode("utf-8-sig")
-                reader = csv.DictReader(io.StringIO(content))
-                rows = list(reader)
+                content = upload.read().decode("utf-8-sig")
+                rows = list(csv.DictReader(io.StringIO(content)))
+            elif extension in (".xlsx", ".xlsm"):
+                import openpyxl
 
-            elif extension == ".xlsx":
-                from openpyxl import load_workbook
-
-                workbook = load_workbook(
-                    uploaded_file,
-                    read_only=True,
-                    data_only=True,
-                )
+                workbook = openpyxl.load_workbook(upload, read_only=True, data_only=True)
                 worksheet = workbook.active
-                values = worksheet.iter_rows(values_only=True)
-
-                headers = next(values, None)
-
-                if not headers:
-                    return Response(
-                        {"detail": "فایل Excel خالی است."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-                headers = [
-                    str(header).strip() if header is not None else ""
-                    for header in headers
-                ]
-
-                rows = [
-                    dict(zip(headers, row))
-                    for row in values
-                    if any(value is not None for value in row)
-                ]
-
+                values = list(worksheet.iter_rows(values_only=True))
+                if not values:
+                    rows = []
+                else:
+                    headers = [str(header or "").strip() for header in values[0]]
+                    rows = [
+                        dict(zip(headers, row))
+                        for row in values[1:]
+                        if any(cell is not None for cell in row)
+                    ]
                 workbook.close()
-
             else:
                 return Response(
-                    {"detail": "فقط فایل‌های CSV و XLSX پشتیبانی می‌شوند."},
+                    {"detail": "فقط فایل CSV یا XLSX پشتیبانی می‌شود."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
-        except (UnicodeDecodeError, csv.Error, OSError, ValueError) as exc:
+        except (UnicodeDecodeError, OSError, ValueError) as exc:
             return Response(
                 {"detail": f"خواندن فایل ناموفق بود: {exc}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not rows:
-            return Response(
-                {"detail": "هیچ ردیفی برای واردسازی پیدا نشد."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        rows = [normalize_import_row(row) for row in rows]
-
-        created_count = 0
-        existing_membership_count = 0
+        results = []
         errors = []
 
-        for row_number, row in enumerate(rows, start=2):
-            serializer = StudentImportRowSerializer(data=row)
+        for index, raw_row in enumerate(rows, start=2):  # ۲ چون سطر اول عنوان است
+            data = normalize_import_row(raw_row)
+            serializer = ImportedStudentSerializer(data=data)
 
             if not serializer.is_valid():
-                errors.append({
-                    "row": row_number,
-                    "errors": serializer.errors,
-                })
+                errors.append({"row": index, "errors": serializer.errors})
                 continue
 
-            data = serializer.validated_data
-
             try:
-                student_number = str(data["student_number"]).strip()
-
-                existing_user = User.objects.filter(
-                    username=student_number,
-                    role=User.Role.STUDENT,
-                ).first()
-
-                existing_profile = StudentProfile.objects.filter(
-                    student_number=student_number,
-                ).first()
-
-                if existing_user or existing_profile:
-                    if (
-                        not existing_user
-                        or not existing_profile
-                        or existing_profile.user_id != existing_user.id
-                    ):
-                        errors.append({
-                            "row": row_number,
-                            "errors": {
-                                "student_number": [
-                                    "اطلاعات حساب و پروفایل این شماره دانشجویی با هم سازگار نیستند."
-                                ]
-                            },
-                        })
-                        continue
-
-                    with transaction.atomic():
-                        _, membership_created = (
-                            OrganizationMembership.objects.get_or_create(
-                                organization=organization,
-                                user=existing_user,
-                            )
-                        )
-
-                    if membership_created:
-                        created_count += 1
-                    else:
-                        existing_membership_count += 1
-
-                    continue
-
                 with transaction.atomic():
-                    student = create_imported_student(data)
-
-                    OrganizationMembership.objects.create(
+                    user, created = create_imported_student(serializer.validated_data)
+                    OrganizationMembership.objects.get_or_create(
                         organization=organization,
-                        user=student,
+                        user=user,
+                        defaults={
+                            "role": OrganizationMembership.Role.STUDENT,
+                            "room_number": serializer.validated_data.get("room_number", ""),
+                        },
                     )
+            except Exception as exc:
+                errors.append({"row": index, "errors": str(exc)})
+                continue
 
-                created_count += 1
-
-            except (DRFValidationError, DjangoValidationError, IntegrityError) as exc:
-                errors.append({
-                    "row": row_number,
-                    "errors": str(exc),
-                })
+            results.append({
+                "username": user.username,
+                "full_name": user.full_name,
+                "status": "CREATED_AND_ATTACHED" if created else "EXISTING_ATTACHED",
+            })
 
         return Response(
             {
-                "organization_id": organization.id,
-                "created_or_added": created_count,
-                "already_member": existing_membership_count,
-                "error_count": len(errors),
+                "summary": {
+                    "total_processed": len(rows),
+                    "created": len(results),
+                    "failed_count": len(errors),
+                },
+                "results": results,
                 "errors": errors,
             },
             status=status.HTTP_200_OK,
