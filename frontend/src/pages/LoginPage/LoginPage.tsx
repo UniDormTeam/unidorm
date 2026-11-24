@@ -5,27 +5,41 @@ import type { FormEvent } from "react";
 import "./LoginPage.css";
 import { login } from "../../services/auth";
 
-type LoginPageProps = {
-  onLogin?: (credentials: { username: string; password: string }) => void;
-};
 
 
-function LoginPage({ onLogin }: LoginPageProps) {
+
+function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  /*کاربر نتونه چندتا درخواست بفرسته.اون پایین بزنیم درحال ورود مثلا*/
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-  event.preventDefault();
+    event.preventDefault();
 
-  try {
-    const data = await login({ username, password });
+    if (isLoading) return;
 
-    console.log("Login successful:", data);
-  } catch (error) {
-    console.error("Login failed:", error);
+    setError("");
+    setIsLoading(true);
+
+    try {
+      const data = await login({ username, password });
+      console.log("Login successful");
+
+    } catch (error) {
+        if (error instanceof TypeError) {
+            setError("ارتباط با سرور برقرار نشد. لطفاً دوباره تلاش کنید.");
+        } else if (error instanceof Error) {
+            setError(error.message);
+        } else {
+            setError("خطای غیرمنتظره‌ای رخ داد.");
+        }
+    } finally {
+      setIsLoading(false);
+    }
   }
-}
 
   return (
     <main dir="rtl" className="login-page">
@@ -92,9 +106,14 @@ function LoginPage({ onLogin }: LoginPageProps) {
                 </button>
               </div>
             </div>
+            {error && (
+                  <p className="login-error" role="alert">
+                    {error}
+                  </p>
+                )}
 
             <div className="form-step">
-              <button type="submit" className="login-button">
+              <button type="submit" className="login-button" disabled={isLoading}>
                 <span>ورود به سامانه</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M14 5l7 7m0 0l-7 7m7-7H3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
