@@ -4,17 +4,23 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import "./LoginPage.css";
 import { login } from "../../services/auth";
-
+// [ADD]
+import { useNavigate } from "react-router-dom";
+import { saveAuthSession } from "../../services/authSession";
 
 
 
 function LoginPage() {
+  
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   /*کاربر نتونه چندتا درخواست بفرسته.اون پایین بزنیم درحال ورود مثلا*/
+
+  // [ADD]
+  const navigate = useNavigate();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -24,18 +30,23 @@ function LoginPage() {
     setError("");
     setIsLoading(true);
 
+    // [CHANGE]
     try {
       const data = await login({ username, password });
-      console.log("Login successful");
 
+      // ذخیره توکن‌ها و اطلاعات کاربر
+      saveAuthSession(data);
+
+      // ورود موفق
+      navigate("/dashboard", { replace: true });
     } catch (error) {
-        if (error instanceof TypeError) {
-            setError("ارتباط با سرور برقرار نشد. لطفاً دوباره تلاش کنید.");
-        } else if (error instanceof Error) {
-            setError(error.message);
-        } else {
-            setError("خطای غیرمنتظره‌ای رخ داد.");
-        }
+      if (error instanceof TypeError) {
+        setError("ارتباط با سرور برقرار نشد. لطفاً دوباره تلاش کنید.");
+      } else if (error instanceof Error) {
+        setError(error.message);
+      } else {
+        setError("خطای غیرمنتظره‌ای رخ داد.");
+      }
     } finally {
       setIsLoading(false);
     }

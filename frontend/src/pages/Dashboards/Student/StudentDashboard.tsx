@@ -1,4 +1,5 @@
-
+// [ADD]
+import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import {
   Bell,
@@ -231,6 +232,8 @@ function StudentDashboard() {
   const [activeTab, setActiveTab] =
     useState<DashboardTab>("home");
 
+    // [ADD]
+  const navigate = useNavigate();
   const student = mockStudentProfile;
 
   return (
@@ -265,7 +268,8 @@ function StudentDashboard() {
             <section className="quick-actions">
               <button
                 className="quick-action"
-                onClick={() => setActiveTab("requests")}
+                // [CHANGE]
+                onClick={() => navigate("/dashboard/report-fault")}
               >
                 <Wrench size={27} />
                 <span>ثبت خرابی</span>
@@ -273,7 +277,8 @@ function StudentDashboard() {
 
               <button
                 className="quick-action"
-                onClick={() => setActiveTab("bookings")}
+                // [CHANGE]
+                onClick={() => navigate("/dashboard/new-booking")}
               >
                 <CalendarDays size={27} />
                 <span>رزرو خدمات</span>
@@ -349,6 +354,14 @@ function StudentDashboard() {
         {/* صفحه درخواست‌های خرابی */}
         {activeTab === "requests" && (
           <section className="dashboard-section">
+          
+          <button
+            type="button"
+            className="primary-form-button"
+            onClick={() => navigate("/dashboard/report-fault")}
+          >
+            ثبت خرابی جدید
+          </button>
             <div className="section-header">
               <h2>درخواست‌های خرابی من</h2>
             </div>
@@ -371,6 +384,14 @@ function StudentDashboard() {
         {/* صفحه رزروها */}
         {activeTab === "bookings" && (
           <section className="dashboard-section">
+           
+          <button
+            type="button"
+            className="primary-form-button"
+            onClick={() => navigate("/dashboard/new-booking")}
+          >
+            ثبت رزرو جدید
+          </button>
             <div className="section-header">
               <h2>رزروهای من</h2>
             </div>
