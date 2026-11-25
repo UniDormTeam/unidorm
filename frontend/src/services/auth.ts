@@ -45,3 +45,16 @@ export async function login(credentials: LoginCredentials) {
   return data;
   
 }
+export async function logout(refresh: string) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/logout/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ refresh }),
+  });
+
+  if (!response.ok) {
+    throw new Error("خروج از حساب در سرور انجام نشد.");
+  }
+}

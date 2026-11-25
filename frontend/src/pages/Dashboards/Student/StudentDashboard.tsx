@@ -1,8 +1,7 @@
-// [ADD]
-import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+
 import {
-  Bell,
   UserRound,
   CalendarDays,
   Wrench,
@@ -11,12 +10,13 @@ import {
   Megaphone,
   Home,
   ChevronLeft,
+  ChevronRight,
+  X,
 } from "lucide-react";
 
 import "./StudentDashboard.css";
 
 import {
-  mockStudentProfile,
   mockAnnouncements,
   mockBookings,
   mockFaultRequests,
@@ -28,6 +28,25 @@ import type {
 } from "./types";
 
 import type { FaultRequest } from "../../../types/maintenance";
+import { getAuthSession } from "../../../services/authSession";
+
+// تاریخ اطلاعیه
+function getAnnouncementDate(
+  announcement: (typeof mockAnnouncements)[number]
+) {
+  // ممکن است تاریخ در داده‌های فعلی Mock هنوز تعریف نشده باشد.
+  const item = announcement as typeof announcement & {
+    created_at?: string;
+  };
+
+  if (!item.created_at) return null;
+
+  const date = new Date(item.created_at);
+
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date.toLocaleDateString("fa-IR");
+}
 
 // وضعیت رزرو
 function BookingStatusLabel({
@@ -96,7 +115,7 @@ function FaultCard({
   );
 }
 
-// اسلایدر اطلاعیه‌ها
+// اسلایدشو اطلاعیه‌ها؛ فقط در صفحه خانه
 function AnnouncementSlider() {
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -120,6 +139,8 @@ function AnnouncementSlider() {
 
   if (!announcement) return null;
 
+  const announcementDate = getAnnouncementDate(announcement);
+
   return (
     <section className="announcement-card">
       <div className="announcement-content">
@@ -130,11 +151,18 @@ function AnnouncementSlider() {
         <h2>{announcement.title}</h2>
 
         <p>{announcement.description}</p>
+
+        {announcementDate && (
+          <span className="announcement-date">
+            تاریخ انتشار: {announcementDate}
+          </span>
+        )}
       </div>
 
       {mockAnnouncements.length > 1 && (
         <>
           <button
+            type="button"
             className="slider-button slider-next"
             onClick={showNext}
             aria-label="اطلاعیه بعدی"
@@ -146,6 +174,7 @@ function AnnouncementSlider() {
             {mockAnnouncements.map((item, index) => (
               <button
                 key={item.id}
+                type="button"
                 className={`slider-dot ${
                   index === currentIndex ? "active" : ""
                 }`}
@@ -159,6 +188,7 @@ function AnnouncementSlider() {
           </div>
 
           <button
+            type="button"
             className="slider-button slider-previous"
             onClick={showPrevious}
             aria-label="اطلاعیه قبلی"
@@ -171,6 +201,208 @@ function AnnouncementSlider() {
   );
 }
 
+// فهرست اطلاعیه‌ها با صفحه‌بندی
+function AnnouncementsList() {
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const itemsPerPage = 7;
+  const totalPages = Math.ceil(
+    mockAnnouncements.length / itemsPerPage
+  );
+
+  const startIndex = (currentPage - 1) * itemsPerPage;
+
+  const visibleAnnouncements = mockAnnouncements.slice(
+    startIndex,
+    startIndex + itemsPerPage
+  );
+
+  function goToPreviousPage() {
+    setCurrentPage((page) => Math.max(1, page - 1));
+  }
+
+  function goToNextPage() {
+    setCurrentPage((page) =>
+      Math.min(totalPages, page + 1)
+    );
+  }
+
+  return (
+    <section className="announcements-page">
+      <div className="section-header">
+        <h2>اطلاعیه‌های خوابگاه</h2>
+
+        <span className="announcements-count">
+          {mockAnnouncements.length} اطلاعیه
+        </span>
+      </div>
+
+      {visibleAnnouncements.length > 0 ? (
+        <div className="announcements-list">
+          {visibleAnnouncements.map((announcement) => {
+            const date = getAnnouncementDate(announcement);
+
+            return (
+              <article
+                className="announcement-list-card"
+                key={announcement.id}
+              >
+                <div className="announcement-list-icon">
+                  <Megaphone size={20} />
+                </div>
+
+                <div className="announcement-list-content">
+                  <h3>{announcement.title}</h3>
+
+                  {date && (
+                    <span className="announcement-date">
+                      {date}
+                    </span>
+                  )}
+
+                  <p>{announcement.description}</p>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty-state">
+          هنوز اطلاعیه‌ای ثبت نشده است.
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="pagination">
+          <button
+            type="button"
+            onClick={goToPreviousPage}
+            disabled={currentPage === 1}
+            aria-label="صفحه قبلی"
+          >
+            <ChevronRight size={18} />
+          </button>
+
+          {Array.from(
+            { length: totalPages },
+            (_, index) => index + 1
+          ).map((page) => (
+            <button
+              type="button"
+              key={page}
+              className={
+                currentPage === page ? "active" : ""
+              }
+              onClick={() => setCurrentPage(page)}
+              aria-current={
+                currentPage === page ? "page" : undefined
+              }
+            >
+              {page}
+            </button>
+          ))}
+
+          <button
+            type="button"
+            onClick={goToNextPage}
+            disabled={currentPage === totalPages}
+            aria-label="صفحه بعدی"
+          >
+            <ChevronLeft size={18} />
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// پنل پروفایل
+function ProfilePanel({
+  onClose,
+}: {
+  onClose: () => void;
+}) {
+  const session = getAuthSession();
+  const user = session?.user;
+
+  const profile = user?.profile;
+
+  const studentProfile =
+    profile && "student_number" in profile
+      ? profile
+      : null;
+
+  return (
+    <div className="profile-panel">
+      <div className="profile-panel-header">
+        <div className="profile-avatar">
+          <UserRound size={22} />
+        </div>
+
+        <div className="profile-name">
+          <strong>
+            {user?.full_name || "کاربر"}
+          </strong>
+          <span>{user?.role_display || ""}</span>
+        </div>
+
+        <button
+          type="button"
+          className="profile-close-button"
+          onClick={onClose}
+          aria-label="بستن پروفایل"
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="profile-details">
+        <div>
+          <span>شماره دانشجویی</span>
+          <strong>
+            {studentProfile?.student_number || "ثبت نشده"}
+          </strong>
+        </div>
+
+        <div>
+          <span>شماره تماس</span>
+          <strong>
+            {user?.phone_number || "ثبت نشده"}
+          </strong>
+        </div>
+
+        <div>
+          <span>خوابگاه</span>
+          <strong>
+            {studentProfile?.dormitory_name || "ثبت نشده"}
+          </strong>
+        </div>
+
+        <div>
+          <span>ساختمان</span>
+          <strong>
+            {studentProfile?.building || "ثبت نشده"}
+          </strong>
+        </div>
+
+        <div>
+          <span>شماره اتاق</span>
+          <strong>
+            {studentProfile?.room_number || "ثبت نشده"}
+          </strong>
+        </div>
+
+        <div>
+          <span>ایمیل</span>
+          <strong>
+            {user?.email || "ثبت نشده"}
+          </strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // نوار پایین صفحه
 function BottomNav({
   activeTab,
@@ -179,16 +411,12 @@ function BottomNav({
   activeTab: DashboardTab;
   onChange: (tab: DashboardTab) => void;
 }) {
+  // در محیط RTL اولین آیتم در سمت راست قرار می‌گیرد.
   const items = [
     {
-      id: "announcements" as const,
-      label: "اطلاعیه‌ها",
-      icon: Megaphone,
-    },
-    {
-      id: "bookings" as const,
-      label: "رزروها",
-      icon: CalendarDays,
+      id: "home" as const,
+      label: "خانه",
+      icon: Home,
     },
     {
       id: "requests" as const,
@@ -196,9 +424,14 @@ function BottomNav({
       icon: Wrench,
     },
     {
-      id: "home" as const,
-      label: "خانه",
-      icon: Home,
+      id: "bookings" as const,
+      label: "رزروها",
+      icon: CalendarDays,
+    },
+    {
+      id: "announcements" as const,
+      label: "اطلاعیه‌ها",
+      icon: Megaphone,
     },
   ];
 
@@ -210,6 +443,7 @@ function BottomNav({
         return (
           <button
             key={item.id}
+            type="button"
             className={`nav-item ${
               activeTab === item.id ? "active" : ""
             }`}
@@ -227,38 +461,52 @@ function BottomNav({
   );
 }
 
+
+
 // صفحه داشبورد دانشجو
 function StudentDashboard() {
   const [activeTab, setActiveTab] =
     useState<DashboardTab>("home");
 
-    // [ADD]
+  const [isProfileOpen, setIsProfileOpen] =
+    useState(false);
+
   const navigate = useNavigate();
-  const student = mockStudentProfile;
+
+  const session = getAuthSession();
+  const user = session?.user;
+
+  const profile = user?.profile;
+
+  const studentProfile =
+    profile && "student_number" in profile
+      ? profile
+      : null;
 
   return (
     <div className="dashboard-page" dir="rtl">
-
       {/* هدر */}
       <header className="dashboard-header">
         <button
-          className="header-icon-button"
-          aria-label="اعلان‌ها"
-          onClick={() => setActiveTab("announcements")}
-        >
-          <Bell size={21} />
-        </button>
-
-        <div
+          type="button"
           className="profile-button"
           aria-label="پروفایل دانشجو"
+          aria-expanded={isProfileOpen}
+          onClick={() =>
+            setIsProfileOpen((open) => !open)
+          }
         >
-          <UserRound size={19} />
-        </div>
+          <UserRound size={20} />
+        </button>
+
+        {isProfileOpen && (
+          <ProfilePanel
+            onClose={() => setIsProfileOpen(false)}
+          />
+        )}
       </header>
 
       <main className="dashboard-main">
-
         {/* صفحه خانه */}
         {activeTab === "home" && (
           <>
@@ -267,101 +515,114 @@ function StudentDashboard() {
             {/* دسترسی سریع */}
             <section className="quick-actions">
               <button
+                type="button"
                 className="quick-action"
-                // [CHANGE]
-                onClick={() => navigate("/dashboard/report-fault")}
+                onClick={() =>
+                  navigate("/dashboard/report-fault")
+                }
               >
                 <Wrench size={27} />
                 <span>ثبت خرابی</span>
               </button>
 
               <button
+                type="button"
                 className="quick-action"
-                // [CHANGE]
-                onClick={() => navigate("/dashboard/new-booking")}
+                onClick={() =>
+                  navigate("/dashboard/new-booking")
+                }
               >
                 <CalendarDays size={27} />
                 <span>رزرو خدمات</span>
               </button>
             </section>
 
-            {/* رزروهای پیش‌رو */}
-            <section className="dashboard-section">
-              <div className="section-header">
-                <h2>رزروهای پیش‌رو</h2>
+            {/* [CHANGE] کنار هم قرار گرفتن رزروهای پیش‌رو و آخرین درخواست‌های خرابی */}
+            <div className="dashboard-two-col">
+              {/* رزروهای پیش‌رو */}
+              <section className="dashboard-section">
+                <div className="section-header">
+                  <h2>رزروهای پیش‌رو</h2>
 
-                <button
-                  onClick={() => setActiveTab("bookings")}
-                >
-                  مشاهده همه
-                  <ChevronLeft size={15} />
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("bookings")}
+                  >
+                    مشاهده همه
+                    <ChevronLeft size={15} />
+                  </button>
+                </div>
 
-              <div className="section-list">
-                {mockBookings.length > 0 ? (
-                  mockBookings.map((booking) => (
-                    <BookingCard
-                      key={booking.id}
-                      booking={booking}
-                    />
-                  ))
-                ) : (
-                  <p>هنوز رزروی ثبت نکرده‌اید.</p>
-                )}
-              </div>
-            </section>
+                <div className="section-list">
+                  {mockBookings.length > 0 ? (
+                    mockBookings.map((booking) => (
+                      <BookingCard
+                        key={booking.id}
+                        booking={booking}
+                      />
+                    ))
+                  ) : (
+                    <p>هنوز رزروی ثبت نکرده‌اید.</p>
+                  )}
+                </div>
+              </section>
 
-            {/* آخرین درخواست‌های خرابی */}
-            <section className="dashboard-section">
-              <div className="section-header">
-                <h2>آخرین درخواست‌های خرابی</h2>
+              {/* آخرین درخواست‌های خرابی */}
+              <section className="dashboard-section">
+                <div className="section-header">
+                  <h2>آخرین درخواست‌های خرابی</h2>
 
-                <button
-                  onClick={() => setActiveTab("requests")}
-                >
-                  مشاهده همه
-                  <ChevronLeft size={15} />
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("requests")}
+                  >
+                    مشاهده همه
+                    <ChevronLeft size={15} />
+                  </button>
+                </div>
 
-              <div className="fault-list">
-                {mockFaultRequests.length > 0 ? (
-                  mockFaultRequests.map((fault) => (
-                    <FaultCard
-                      key={fault.id}
-                      fault={fault}
-                    />
-                  ))
-                ) : (
-                  <p>هنوز درخواستی ثبت نکرده‌اید.</p>
-                )}
-              </div>
-            </section>
-
-            {/* اطلاعات خوابگاه */}
-            <div className="student-room-info">
-              <span>{student.dormitory_name}</span>
-
-              <span>
-                ساختمان {student.building}، اتاق{" "}
-                {student.room_number}
-              </span>
+                <div className="fault-list">
+                  {mockFaultRequests.length > 0 ? (
+                    mockFaultRequests.map((fault) => (
+                      <FaultCard
+                        key={fault.id}
+                        fault={fault}
+                      />
+                    ))
+                  ) : (
+                    <p>هنوز درخواستی ثبت نکرده‌اید.</p>
+                  )}
+                </div>
+              </section>
             </div>
+
+            {/* اطلاعات خوابگاه از بک‌اند */}
+            {studentProfile && (
+              <div className="student-room-info">
+                <span>{studentProfile.dormitory_name}</span>
+
+                <span>
+                  ساختمان {studentProfile.building}، اتاق{" "}
+                  {studentProfile.room_number}
+                </span>
+              </div>
+            )}
           </>
         )}
 
         {/* صفحه درخواست‌های خرابی */}
         {activeTab === "requests" && (
           <section className="dashboard-section">
-          
-          <button
-            type="button"
-            className="primary-form-button"
-            onClick={() => navigate("/dashboard/report-fault")}
-          >
-            ثبت خرابی جدید
-          </button>
+            <button
+              type="button"
+              className="primary-form-button"
+              onClick={() =>
+                navigate("/dashboard/report-fault")
+              }
+            >
+              ثبت خرابی جدید
+            </button>
+
             <div className="section-header">
               <h2>درخواست‌های خرابی من</h2>
             </div>
@@ -384,14 +645,16 @@ function StudentDashboard() {
         {/* صفحه رزروها */}
         {activeTab === "bookings" && (
           <section className="dashboard-section">
-           
-          <button
-            type="button"
-            className="primary-form-button"
-            onClick={() => navigate("/dashboard/new-booking")}
-          >
-            ثبت رزرو جدید
-          </button>
+            <button
+              type="button"
+              className="primary-form-button"
+              onClick={() =>
+                navigate("/dashboard/new-booking")
+              }
+            >
+              ثبت رزرو جدید
+            </button>
+
             <div className="section-header">
               <h2>رزروهای من</h2>
             </div>
@@ -411,17 +674,10 @@ function StudentDashboard() {
           </section>
         )}
 
-        {/* صفحه اطلاعیه‌ها */}
+        {/* صفحه اطلاعیه‌ها: فهرست صفحه‌بندی‌شده */}
         {activeTab === "announcements" && (
-          <section>
-            <div className="section-header">
-              <h2>اطلاعیه‌های خوابگاه</h2>
-            </div>
-
-            <AnnouncementSlider />
-          </section>
+          <AnnouncementsList />
         )}
-
       </main>
 
       <BottomNav

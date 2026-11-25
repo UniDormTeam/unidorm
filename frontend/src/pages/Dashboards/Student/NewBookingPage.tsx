@@ -1,5 +1,9 @@
+
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+
+// [ADD]
+import { mockBookings } from "./data/mockData";
 
 import type { ServiceType } from "./types";
 
@@ -34,14 +38,18 @@ const devices: Record<ServiceType, string[]> = {
   ],
 };
 
+// [CHANGE] بازه‌های ۴۵ دقیقه‌ای (قابل جایگزینی با بازه‌های ثبت‌شده توسط مسئول بر اساس روز)
 const timeSlots = [
-  "۰۸:۰۰ تا ۰۹:۰۰",
-  "۱۰:۰۰ تا ۱۱:۰۰",
-  "۱۲:۰۰ تا ۱۳:۰۰",
-  "۱۴:۰۰ تا ۱۵:۰۰",
-  "۱۶:۰۰ تا ۱۷:۰۰",
-  "۱۸:۰۰ تا ۱۹:۰۰",
+  "۰۸:۰۰ تا ۰۸:۴۵",
+  "۰۸:۴۵ تا ۰۹:۳۰",
+  "۰۹:۳۰ تا ۱۰:۱۵",
+  "۱۰:۱۵ تا ۱۱:۰۰",
+  "۱۱:۰۰ تا ۱۱:۴۵",
+  "۱۱:۴۵ تا ۱۲:۳۰",
 ];
+
+// [ADD] حداکثر تعداد رزرو مجاز برای هر کاربر
+const MAX_BOOKINGS_PER_USER = 2;
 
 function NewBookingPage() {
   const navigate = useNavigate();
@@ -55,6 +63,16 @@ function NewBookingPage() {
 
   const today = new Date().toISOString().split("T")[0];
 
+  const maxDateObj = new Date();
+  maxDateObj.setDate(maxDateObj.getDate() + 7);
+  const maxDate = maxDateObj.toISOString().split("T")[0];
+
+  // [ADD] بررسی تعداد رزروهای کاربر برای اعمال محدودیت حداکثر ۲ تایم/ماشین
+  const activeBookingsCount = mockBookings.filter(
+    (booking) => booking.status !== "cancelled"
+  ).length;
+  const hasReachedBookingLimit = activeBookingsCount >= MAX_BOOKINGS_PER_USER;
+
   function handleServiceChange(value: ServiceType) {
     setService(value);
     setDevice("");
@@ -62,7 +80,8 @@ function NewBookingPage() {
   }
 
   function handleContinue() {
-    if (!service || !device || !date || !timeSlot) return;
+    // [CHANGE]
+    if (!service || !device || !date || !timeSlot || hasReachedBookingLimit) return;
 
     setShowReview(true);
   }
@@ -94,6 +113,13 @@ function NewBookingPage() {
         </header>
 
         <section className="student-form-card">
+          {/* [ADD] */}
+          {hasReachedBookingLimit && (
+            <p className="form-error" role="alert">
+              شما به سقف مجاز رزرو (حداکثر ۲ نوبت) رسیده‌اید.
+            </p>
+          )}
+
           <div className="booking-step">
             <span className="step-number">۱</span>
             <div>
@@ -165,6 +191,7 @@ function NewBookingPage() {
                   id="booking-date"
                   type="date"
                   min={today}
+                  max={maxDate}
                   value={date}
                   onChange={(event) => {
                     setDate(event.target.value);
@@ -198,7 +225,8 @@ function NewBookingPage() {
             <button
               type="button"
               className="primary-form-button"
-              disabled={!service || !device || !date || !timeSlot}
+              // [CHANGE]
+              disabled={!service || !device || !date || !timeSlot || hasReachedBookingLimit}
               onClick={handleContinue}
             >
               بررسی اطلاعات رزرو
@@ -284,3 +312,4 @@ function NewBookingPage() {
 }
 
 export default NewBookingPage;
+
